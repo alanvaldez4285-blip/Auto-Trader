@@ -27,6 +27,11 @@ on [Alpaca](https://alpaca.markets). Stocks and options are both supported.
 | `Buy NVDA @ 118.50` / `Entry $SOFI 7.85` | Buys shares |
 | `Trim SPY 450c` / `Sell half TSLA` | Sells half of the bot's position (see `trim_fraction`) |
 | `STC SPY 450c @ 1.80` / `Sold all AAPL` / `All out SPY` | Sells the bot's whole position in that ticker or contract |
+| `In SPX 5800C 3.20` / `SPX 5800C @ 3.20 BTO` | Buys the SPXW 5800 call expiring today (no date on SPX means 0DTE) |
+| `Out SPX` / `Getting out SPX 5800C` | Sells the bot's SPX position |
+
+"In" and "Out" only count when they start a line, so everyday chat like "SPX looking good in here" is ignored.
+If the trader uses other words, add them under `parsing` in `config.yaml` instead of editing code.
 
 Test how your server's messages are read before trading:
 
@@ -36,6 +41,37 @@ python -m copytrader parse "BTO SPY 450c 10/20 @ 1.20" "Trim SPY 450c" "Sold all
 
 If a format your server uses is not recognised, open an issue with a few example messages or adjust
 the patterns in `copytrader/parser.py`.
+
+## Copying the options-with-demon channel (SPX 0DTE)
+
+A ready-made config for this channel is in `examples/options-with-demon.yaml`:
+
+```bash
+cp examples/options-with-demon.yaml config.yaml
+```
+
+What it sets up:
+
+- **Channel by name.** It watches any channel whose name contains `options-with-demon`, so you don't need the ID.
+- **SPX routing.** SPX alerts are placed as SPXW contracts, the PM-settled weeklies and 0DTEs that
+  Alpaca supports for paper and live trading. An SPX alert with no date is treated as expiring today.
+- **SPX price ticks.** Limit prices round to $0.05 under $3 and $0.10 at $3 and above, as Cboe requires.
+- **One contract per alert,** capped at $1,500, at most 5 entries a day. Only alerts with an entry price are copied.
+- **End-of-day safety net.** At 3:50pm ET the bot sells any contract that expires today, in case the
+  trader's exit alert was missed or never posted. Change or turn off `auto_close_expiring_at` in the config.
+
+Before trading, paste a handful of the trader's real alerts into the parse command and confirm each one
+reads correctly. Include entries, trims, and exits:
+
+```bash
+python -m copytrader parse "paste an entry alert here" "paste a trim alert here" "paste an exit alert here"
+```
+
+**Access.** The lock icon on that channel means it is limited to members with a certain role. A bot can
+only read it if a server admin invites the bot and gives it that role. It is a regular text channel, not
+an Announcement channel, so the Follow workaround below does not apply to it.
+
+SPXW contracts carry a regulatory fee of about $0.50 to $0.59 per contract on Alpaca, on top of the usual costs.
 
 ## Setup
 

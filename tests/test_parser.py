@@ -77,3 +77,41 @@ def test_stop_loss_is_not_price():
 def test_occ_symbol():
     assert occ_symbol("spy", date(2026, 10, 20), "c", 450) == "SPY261020C00450000"
     assert occ_symbol("SPY", date(2026, 10, 20), "P", 452.5) == "SPY261020P00452500"
+
+
+@pytest.mark.parametrize(
+    "text, action",
+    [
+        ("In SPX 5800C 3.20", BUY),
+        ("im in spx 5850p @ 4.1", BUY),
+        ("Out SPX", SELL),
+        ("Getting out SPX 5800C here", SELL),
+    ],
+)
+def test_line_start_in_out(text, action):
+    s = p(text)
+    assert s.action == action and s.ticker == "SPX"
+
+
+def test_in_mid_sentence_is_not_a_buy():
+    assert p("SPX looking good in here") is None
+    assert p("In a meeting") is None
+
+
+def test_action_word_at_end():
+    s = p("SPX 5800C 0DTE @ 3.20 BTO")
+    assert (s.action, s.ticker, s.strike, s.expiration, s.price) == (BUY, "SPX", 5800, TODAY, 3.20)
+
+
+def test_extra_words():
+    assert parse_signal("Loading SPX 5800c 2.5", TODAY) is None
+    s = parse_signal("Loading SPX 5800c 2.5", TODAY, {"buy": ["loading"]})
+    assert s.action == BUY and s.price == 2.5
+    s = parse_signal("Paid out SPX", TODAY, {"sell": ["paid out"]})
+    assert s.action == SELL
+
+
+def test_spx_maps_to_spxw():
+    s = p("BTO SPX 5800C 9/25 @ 3.20")
+    assert s.symbol == "SPXW260925C05800000"
+    assert s.broker_symbol({}) == "SPX260925C05800000"

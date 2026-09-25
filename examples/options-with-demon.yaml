@@ -1,0 +1,54 @@
+# Preset for copying the options-with-demon channel (SPX 0DTE call-outs).
+#   cp examples/options-with-demon.yaml config.yaml
+# Secrets still go in .env. Keep dry_run: true until the log shows every alert read correctly.
+dry_run: true
+
+state_file: state.json
+log_file: copytrader.log
+
+discord:
+  channel_names: [options-with-demon]
+  channel_ids: []
+  # Only one trader posts in this channel. To be safe, right-click them > Copy User ID and add it here.
+  author_ids: []
+  author_names: []
+  read_embeds: true
+
+broker:
+  name: alpaca
+  paper: true
+
+sizing:
+  # SPX contracts often cost $200-$1,500 each, so a fixed count is simpler than a dollar budget.
+  # With 1 contract, "trim" alerts are skipped and you exit on the final "out" alert.
+  # Use 2 or more contracts if you want trims copied too.
+  mode: fixed
+  fixed_contracts: 1
+
+risk:
+  allow_stocks: false
+  allow_options: true
+  max_trades_per_day: 5
+  max_open_positions: 2
+  max_dollars_per_trade: 1500   # skip any alert where one contract costs more than this
+  allowed_tickers: []
+  blocked_tickers: []
+  add_to_existing_positions: false
+  require_price_for_entries: true   # only copy alerts that state an entry price
+
+parsing:
+  # Add any words this trader uses that the bot doesn't know yet, e.g. [loading, grabbing].
+  extra_buy_words: []
+  extra_sell_words: []
+  extra_trim_words: []
+  assume_0dte_tickers: [SPX, SPXW, XSP]   # no date in the alert means it expires today
+
+execution:
+  entry_order_type: limit
+  entry_slippage_pct: 5        # pay up to 5% above the alert price, then rounded to SPX's $0.05/$0.10 ticks
+  exit_order_type: market     # get out fast when the trader exits
+  exit_slippage_pct: 5
+  trim_fraction: 0.5
+  option_roots: {SPX: SPXW}   # SPX weeklies and 0DTE trade as SPXW contracts
+  auto_close_expiring_at: "15:50"   # sell same-day contracts at 3:50pm ET if no exit alert came
+  market_timezone: America/New_York

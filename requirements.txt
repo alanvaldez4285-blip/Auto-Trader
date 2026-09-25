@@ -2,3 +2,4 @@ discord.py>=2.4
 alpaca-py>=0.30
 PyYAML>=6.0
 python-dotenv>=1.0
+tzdata; sys_platform == "win32"

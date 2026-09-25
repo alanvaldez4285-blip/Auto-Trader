@@ -32,11 +32,41 @@ class SignalListener(discord.Client):
         self.cfg = cfg
         self.trader = trader
         self._author_names = {n.lower() for n in cfg.author_names}
+        self._channel_names = [n.lower() for n in cfg.channel_names]
+
+    async def setup_hook(self) -> None:
+        self.loop.create_task(self._expiry_watchdog())
+
+    async def _expiry_watchdog(self) -> None:
+        """Every 30 seconds, sell same-day-expiry options once the configured cut-off time passes."""
+        while not self.is_closed():
+            try:
+                await asyncio.to_thread(self.trader.close_expiring)
+            except Exception:  # noqa: BLE001 - keep the watchdog alive
+                log.exception("Expiry watchdog failed")
+            await asyncio.sleep(30)
+
+    def _channel_matches(self, channel) -> bool:
+        if not (self.cfg.channel_ids or self._channel_names):
+            return True
+        if channel.id in self.cfg.channel_ids:
+            return True
+        name = (getattr(channel, "name", None) or "").lower()
+        return any(wanted in name for wanted in self._channel_names)
 
     async def on_ready(self) -> None:
         log.info("Logged in to Discord as %s", self.user)
-        if not self.cfg.channel_ids:
-            log.warning("No channel_ids configured: listening to EVERY channel the bot can see")
+        if not (self.cfg.channel_ids or self._channel_names):
+            log.warning("No channels configured: listening to EVERY channel the bot can see")
+        if self._channel_names:
+            found = [c for c in self.get_all_channels() if hasattr(c, "history") and self._channel_matches(c)]
+            for channel in found:
+                log.info("Watching #%s in %s (matched by name)", channel, channel.guild)
+            if not found:
+                log.error(
+                    "No visible channel matches %s. The bot must be in the server and allowed to read it.",
+                    self.cfg.channel_names,
+                )
         for channel_id in self.cfg.channel_ids:
             channel = self.get_channel(channel_id)
             if channel is None:
@@ -47,7 +77,7 @@ class SignalListener(discord.Client):
     def _is_wanted(self, message: discord.Message) -> bool:
         if message.author == self.user:
             return False
-        if self.cfg.channel_ids and message.channel.id not in self.cfg.channel_ids:
+        if not self._channel_matches(message.channel):
             return False
         if not (self.cfg.author_ids or self._author_names):
             return True

@@ -11,6 +11,8 @@ log_file: copytrader.log
 discord:
   # Right-click the signal channel > Copy Channel ID (turn on Developer Mode in Discord settings first).
   channel_ids: []
+  # Or match channels by name, e.g. [options-with-demon]. Emoji around the name are fine.
+  channel_names: []
   # Only copy messages from these people. Right-click a user > Copy User ID.
   # Leave both empty to act on anyone who posts in the channel.
   author_ids: []
@@ -38,9 +40,19 @@ risk:
   add_to_existing_positions: false   # copy "adding more" call-outs on a ticker you already hold
   require_price_for_entries: false   # ignore entries that don't state a price
 
+parsing:
+  # Words this trader uses that the bot doesn't know yet, e.g. extra_buy_words: [loading, grabbing]
+  extra_buy_words: []
+  extra_sell_words: []
+  extra_trim_words: []
+  assume_0dte_tickers: [SPX, SPXW, XSP]   # option entries with no date on these expire today
+
 execution:
   entry_order_type: limit   # limit protects you from chasing a spike; market fills immediately
   entry_slippage_pct: 5     # limit price = call-out price + 5%
   exit_order_type: market   # market gets you out fast; limit uses call-out price - exit_slippage_pct
   exit_slippage_pct: 5
   trim_fraction: 0.5        # "Trim" / "sell half" sells this share of the position
+  option_roots: {SPX: SPXW}   # SPX weeklies and 0DTE trade as SPXW contracts
+  auto_close_expiring_at: "15:50"   # sell same-day-expiry options at this time; null turns it off
+  market_timezone: America/New_York

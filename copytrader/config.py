@@ -13,6 +13,9 @@ import yaml
 class DiscordConfig:
     token: str = ""
     channel_ids: list[int] = field(default_factory=list)
+    # Match channels by name instead of ID, e.g. "options-with-demon". Case-insensitive substring,
+    # so emoji and separators around the name don't matter.
+    channel_names: list[str] = field(default_factory=list)
     author_ids: list[int] = field(default_factory=list)
     author_names: list[str] = field(default_factory=list)
     read_embeds: bool = True
@@ -48,12 +51,31 @@ class RiskConfig:
 
 
 @dataclass
+class ParsingConfig:
+    # Extra words or phrases a trader uses, on top of the built-in BTO/STC/trim vocabulary.
+    extra_buy_words: list[str] = field(default_factory=list)
+    extra_sell_words: list[str] = field(default_factory=list)
+    extra_trim_words: list[str] = field(default_factory=list)
+    # Option entries on these tickers that give no expiration date are treated as expiring today.
+    assume_0dte_tickers: list[str] = field(default_factory=lambda: ["SPX", "SPXW", "XSP"])
+
+    def extra_words(self) -> dict[str, list[str]]:
+        return {"buy": self.extra_buy_words, "sell": self.extra_sell_words, "trim": self.extra_trim_words}
+
+
+@dataclass
 class ExecutionConfig:
     entry_order_type: str = "limit"  # "limit" or "market"
     entry_slippage_pct: float = 5.0
     exit_order_type: str = "market"  # "limit" or "market"
     exit_slippage_pct: float = 5.0
     trim_fraction: float = 0.5
+    # Broker option root per ticker. SPX weeklies and 0DTE (PM-settled) trade under SPXW.
+    option_roots: dict[str, str] = field(default_factory=lambda: {"SPX": "SPXW"})
+    # Sell options that expire today at this time (market timezone), so a missed exit call-out can't
+    # leave a 0DTE contract to expire. Set to null to turn off.
+    auto_close_expiring_at: str | int | None = "15:50"
+    market_timezone: str = "America/New_York"
 
 
 @dataclass
@@ -65,6 +87,7 @@ class Config:
     broker: BrokerConfig = field(default_factory=BrokerConfig)
     sizing: SizingConfig = field(default_factory=SizingConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
+    parsing: ParsingConfig = field(default_factory=ParsingConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
 
 
@@ -84,6 +107,7 @@ def load_config(path: str | Path) -> Config:
         "broker": BrokerConfig,
         "sizing": SizingConfig,
         "risk": RiskConfig,
+        "parsing": ParsingConfig,
         "execution": ExecutionConfig,
     }
     top = {k: v for k, v in raw.items() if k not in sections}
@@ -100,6 +124,10 @@ def load_config(path: str | Path) -> Config:
     cfg.risk.blocked_tickers = [t.upper() for t in cfg.risk.blocked_tickers]
     cfg.discord.channel_ids = [int(x) for x in cfg.discord.channel_ids]
     cfg.discord.author_ids = [int(x) for x in cfg.discord.author_ids]
+    cfg.parsing.assume_0dte_tickers = [t.upper() for t in cfg.parsing.assume_0dte_tickers]
+    cfg.execution.option_roots = {k.upper(): v.upper() for k, v in cfg.execution.option_roots.items()}
+    if cfg.execution.auto_close_expiring_at:
+        parse_hhmm(cfg.execution.auto_close_expiring_at)
     if cfg.sizing.mode not in ("dollars", "fixed"):
         raise ValueError("sizing.mode must be 'dollars' or 'fixed'")
     for name in ("entry_order_type", "exit_order_type"):
@@ -108,3 +136,15 @@ def load_config(path: str | Path) -> Config:
     if not 0 < cfg.execution.trim_fraction <= 1:
         raise ValueError("execution.trim_fraction must be between 0 and 1")
     return cfg
+
+
+def parse_hhmm(value: str):
+    from datetime import time
+
+    try:
+        if isinstance(value, int):  # YAML reads an unquoted 15:50 as base-60 (950 minutes)
+            return time(value // 60, value % 60)
+        hour, minute = (int(x) for x in str(value).split(":"))
+        return time(hour, minute)
+    except ValueError as exc:
+        raise ValueError(f"expected a time like 15:50, got {value!r}") from exc

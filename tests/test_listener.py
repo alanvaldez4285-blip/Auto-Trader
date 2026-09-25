@@ -31,3 +31,15 @@ def test_author_filters():
     assert lst._is_wanted(msg(author_id=10))
     assert lst._is_wanted(msg(author_id=99, name="bigtrader"))
     assert not lst._is_wanted(msg(author_id=99, name="someone"))
+
+
+def named_msg(channel_name, channel_id=5):
+    m = msg()
+    m.channel = SimpleNamespace(id=channel_id, name=channel_name)
+    return m
+
+
+def test_channel_name_filter():
+    lst = listener(channel_names=["options-with-demon"])
+    assert lst._is_wanted(named_msg("😈｜options-with-demon😈"))
+    assert not lst._is_wanted(named_msg("💬｜main-chat"))

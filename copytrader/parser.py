@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import date
+from functools import lru_cache
 
 BUY, SELL, TRIM = "buy", "sell", "trim"
 STOCK, OPTION = "stock", "option"
@@ -25,10 +26,28 @@ _ACTION_PATTERNS: list[tuple[str, str]] = [
     (BUY, r"bto|buy\s+to\s+open|buy(?:ing)?|bought|entry|entering"),
     (SELL, r"stc|sell\s+to\s+close|sell(?:ing)?|sold|clos(?:e|ed|ing)|exit(?:ed|ing)?|all\s+out|out\s+of"),
 ]
-_ACTION_RE = re.compile(
-    "|".join(f"(?P<{name}_{i}>\\b(?:{pat})\\b)" for i, (name, pat) in enumerate(_ACTION_PATTERNS)),
-    re.IGNORECASE,
-)
+# "In SPX 5800C 3.20" / "Out SPX" are common, but "in" and "out" are everyday words,
+# so they only count as actions at the start of a line.
+_LINE_START_PATTERNS: list[tuple[str, str]] = [
+    (BUY, r"^\s*(?:i'?m\s+|i\s+am\s+|getting\s+)?in\b"),
+    (SELL, r"^\s*(?:i'?m\s+|i\s+am\s+|getting\s+)?out\b"),
+]
+
+# Index options: an index cannot be bought as shares, and SPX weeklies/0DTE trade under the SPXW root.
+INDEX_TICKERS = {"SPX", "SPXW", "XSP", "NDX", "NDXP", "RUT", "RUTW", "VIX", "VIXW", "DJX"}
+DEFAULT_OPTION_ROOTS = {"SPX": "SPXW"}
+
+
+@lru_cache(maxsize=32)
+def _action_regex(extra: tuple[tuple[str, tuple[str, ...]], ...] = ()) -> re.Pattern:
+    words = list(_ACTION_PATTERNS)
+    for action, phrases in extra:
+        if phrases:
+            words.append((action, "|".join(re.escape(ph).replace("\\ ", r"\s+") for ph in phrases)))
+    parts = [f"(?P<{name}_{i}>\\b(?:{pat})\\b)" for i, (name, pat) in enumerate(words)]
+    parts += [f"(?P<{name}_L{i}>{pat})" for i, (name, pat) in enumerate(_LINE_START_PATTERNS)]
+    return re.compile("|".join(parts), re.IGNORECASE | re.MULTILINE)
+
 
 # Stop-loss / target annotations carry numbers that must not be mistaken for the entry price.
 _ANNOTATION_RE = re.compile(
@@ -78,11 +97,16 @@ class Signal:
 
     @property
     def symbol(self) -> str:
-        """Broker symbol: the ticker for stocks, the OCC symbol for a fully specified option."""
+        return self.broker_symbol()
+
+    def broker_symbol(self, option_roots: dict[str, str] | None = None) -> str:
+        """The ticker for stocks; the OCC symbol for a fully specified option (SPX maps to SPXW)."""
         if self.asset_type == OPTION:
             if not self.is_complete_contract:
                 raise ValueError("option signal is missing strike, side or expiration")
-            return occ_symbol(self.ticker, self.expiration, self.right, self.strike)
+            roots = DEFAULT_OPTION_ROOTS if option_roots is None else option_roots
+            root = roots.get(self.ticker, self.ticker)
+            return occ_symbol(root, self.expiration, self.right, self.strike)
         return self.ticker
 
     def describe(self) -> str:
@@ -136,23 +160,37 @@ def _blank(text: str, spans: list[tuple[int, int]]) -> str:
     return "".join(chars)
 
 
-def parse_signal(text: str, today: date | None = None) -> Signal | None:
-    """Parse one message. Returns None when it is not a recognisable trade call-out."""
+def parse_signal(
+    text: str,
+    today: date | None = None,
+    extra_words: dict[str, list[str]] | None = None,
+) -> Signal | None:
+    """Parse one message. Returns None when it is not a recognisable trade call-out.
+
+    `extra_words` adds phrases per action, e.g. {"buy": ["loading"], "sell": ["cashed"]}.
+    """
     today = today or date.today()
     raw = text
     # Drop Discord mentions, custom emoji and URLs so they don't produce false tickers.
     text = re.sub(r"<[@#:a-zA-Z0-9_!&]+>|https?://\S+", " ", text)
     text = text.replace("*", " ").replace("_", " ").replace("`", " ")
 
-    action_match = _ACTION_RE.search(text)
+    extra = tuple(sorted((k, tuple(v)) for k, v in (extra_words or {}).items()))
+    action_match = _action_regex(extra).search(text)
     if not action_match:
         return None
     action = action_match.lastgroup.split("_")[0]
-    # Everything before the action keyword is usually chatter ("ok guys"); look after it first.
-    body = text[action_match.end():]
-    if not body.strip():
-        return None
+    # Text before the action keyword is usually chatter ("ok guys"), so look after it first.
+    # Some alerts put the action last ("SPX 5800C @ 3.20 BTO"); fall back to the whole message then.
+    after = text[action_match.end():]
+    whole = _blank(text, [action_match.span()])
+    for body in (after, whole):
+        if body.strip() and (signal := _parse_body(body, action, today, raw)):
+            return signal
+    return None
 
+
+def _parse_body(body: str, action: str, today: date, raw: str) -> Signal | None:
     body = _ANNOTATION_RE.sub(" ", body)
 
     strike_m = _STRIKE_RE.search(body)

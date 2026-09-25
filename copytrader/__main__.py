@@ -8,8 +8,6 @@ import sys
 
 from dotenv import load_dotenv
 
-from .parser import parse_signal
-
 
 def _setup_logging(log_file: str | None, verbose: bool) -> None:
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
@@ -24,15 +22,27 @@ def _setup_logging(log_file: str | None, verbose: bool) -> None:
 
 
 def cmd_parse(args) -> int:
+    from pathlib import Path
+
+    from .broker import DryRunBroker
+    from .config import Config, load_config
+    from .trader import Ledger, Trader
+
+    cfg = load_config(args.config) if Path(args.config).exists() else Config()
+    # A throwaway trader gives the same parsing (extra words, 0DTE defaults, SPX->SPXW) as a live run.
+    trader = Trader(cfg, DryRunBroker(), ledger=Ledger("/nonexistent/never-saved.json"))
     for text in args.messages:
-        signal = parse_signal(text)
+        signal = trader.parse(text)
         if signal is None:
             print(f"{text!r}\n  -> not a trade signal")
+            continue
+        if signal.action != "buy":
+            note = "  (sells matching positions the bot opened)"
+        elif signal.asset_type == "stock" or signal.is_complete_contract:
+            note = f"  (broker symbol {signal.broker_symbol(cfg.execution.option_roots)})"
         else:
-            symbol = ""
-            if signal.asset_type == "stock" or signal.is_complete_contract:
-                symbol = f"  (broker symbol {signal.symbol})"
-            print(f"{text!r}\n  -> {signal.describe()}{symbol}")
+            note = "  (would be skipped: option has no expiration date)"
+        print(f"{text!r}\n  -> {signal.describe()}{note}")
     return 0
 
 
@@ -64,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parse = sub.add_parser("parse", help="show how messages would be interpreted, without trading")
     parse.add_argument("messages", nargs="+")
+    parse.add_argument("-c", "--config", default="config.yaml", help="used for extra words, if it exists")
     parse.set_defaults(func=cmd_parse)
 
     args = parser.parse_args(argv)

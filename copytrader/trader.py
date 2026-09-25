@@ -13,14 +13,33 @@ import threading
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .broker import Broker
-from .config import Config
-from .parser import BUY, OPTION, SELL, STOCK, TRIM, Signal, parse_signal
+from .config import Config, parse_hhmm
+from .parser import BUY, INDEX_TICKERS, OPTION, SELL, STOCK, TRIM, Signal, parse_signal
 
 log = logging.getLogger(__name__)
 
 MAX_REMEMBERED_MESSAGES = 2000
+# Cboe minimum price increments for index options: $0.05 under $3, $0.10 at $3 and above.
+_NICKEL_DIME_ROOTS = {"SPX", "SPXW", "VIX", "VIXW", "NDX", "NDXP", "RUT", "RUTW", "DJX"}
+
+
+def option_root(symbol: str) -> str:
+    """Root of an OCC symbol: everything before the 6-digit date, e.g. SPXW from SPXW260925C06500000."""
+    return symbol[:-15]
+
+
+def round_to_tick(price: float, symbol: str, asset_type: str, side: str) -> float:
+    if asset_type == OPTION and option_root(symbol) in _NICKEL_DIME_ROOTS:
+        tick = 0.05 if price < 3 else 0.10
+    else:
+        tick = 0.01
+    steps = price / tick
+    # Buys round up and sells round down, so the limit is never tighter than intended.
+    steps = math.ceil(steps - 1e-9) if side == "buy" else math.floor(steps + 1e-9)
+    return round(max(steps, 1) * tick, 2)
 
 
 @dataclass
@@ -71,8 +90,30 @@ class Trader:
         self.cfg = cfg
         self.broker = broker
         self.ledger = ledger or Ledger(cfg.state_file)
-        self._today = today or date.today
+        self._clock = today
         self._lock = threading.Lock()
+        self._auto_close_failed_at: dict[str, datetime] = {}
+
+    def _now(self) -> datetime:
+        return datetime.now(ZoneInfo(self.cfg.execution.market_timezone))
+
+    def _today(self) -> date:
+        # Expirations and daily limits follow the exchange's calendar day, not the local one.
+        return self._clock() if self._clock else self._now().date()
+
+    def parse(self, text: str) -> Signal | None:
+        """Parse with this config's extra words, filling in the 0DTE expiration where configured."""
+        today = self._today()
+        signal = parse_signal(text, today=today, extra_words=self.cfg.parsing.extra_words())
+        if (
+            signal
+            and signal.action == BUY
+            and signal.asset_type == OPTION
+            and signal.expiration is None
+            and signal.ticker in self.cfg.parsing.assume_0dte_tickers
+        ):
+            signal.expiration = today
+        return signal
 
     # ------------------------------------------------------------------ entry point
     def handle_message(self, message_id: str | int, text: str) -> list[Outcome]:
@@ -81,7 +122,7 @@ class Trader:
             if message_id in self.ledger.processed:
                 return []
             self.ledger.processed.append(message_id)
-            signal = parse_signal(text, today=self._today())
+            signal = self.parse(text)
             if signal is None:
                 self.ledger.save()
                 return []
@@ -104,6 +145,8 @@ class Trader:
         risk, sizing, execution = self.cfg.risk, self.cfg.sizing, self.cfg.execution
         what = signal.describe()
 
+        if signal.asset_type == STOCK and signal.ticker in INDEX_TICKERS:
+            return Outcome("skipped", f"{what}: {signal.ticker} is an index; the message named no option strike")
         if signal.asset_type == STOCK and not risk.allow_stocks:
             return Outcome("skipped", f"{what}: stock trading is disabled")
         if signal.asset_type == OPTION and not risk.allow_options:
@@ -120,7 +163,7 @@ class Trader:
         if self.ledger.entries_today(today) >= risk.max_trades_per_day:
             return Outcome("skipped", f"{what}: daily limit of {risk.max_trades_per_day} entries reached")
 
-        symbol = signal.symbol
+        symbol = signal.broker_symbol(execution.option_roots)
         existing = self.ledger.positions.get(symbol)
         if existing and not risk.add_to_existing_positions:
             return Outcome("skipped", f"{what}: already holding {existing['qty']} {symbol}")
@@ -132,7 +175,9 @@ class Trader:
             return Outcome("skipped", f"{what}: no price in the message and no market quote available")
 
         multiplier = 100 if signal.asset_type == OPTION else 1
-        order_price = price * (1 + execution.entry_slippage_pct / 100)
+        order_price = round_to_tick(
+            price * (1 + execution.entry_slippage_pct / 100), symbol, signal.asset_type, "buy"
+        )
         unit_cost = order_price * multiplier
         if sizing.mode == "fixed":
             qty = sizing.fixed_contracts if signal.asset_type == OPTION else sizing.fixed_shares
@@ -149,7 +194,7 @@ class Trader:
         if cost > buying_power:
             return Outcome("skipped", f"{what}: needs ${cost:,.2f} but buying power is ${buying_power:,.2f}")
 
-        limit = round(order_price, 2) if execution.entry_order_type == "limit" else None
+        limit = order_price if execution.entry_order_type == "limit" else None
         order = self.broker.submit_order(symbol, qty, "buy", signal.asset_type, limit_price=limit)
 
         self.ledger.count_entry(today)
@@ -220,7 +265,9 @@ class Trader:
 
         limit = None
         if execution.exit_order_type == "limit" and signal.price:
-            limit = round(signal.price * (1 - execution.exit_slippage_pct / 100), 2)
+            limit = round_to_tick(
+                signal.price * (1 - execution.exit_slippage_pct / 100), symbol, pos["asset_type"], "sell"
+            )
         order = self.broker.submit_order(symbol, qty, "sell", pos["asset_type"], limit_price=limit)
 
         remaining = held - qty
@@ -230,6 +277,44 @@ class Trader:
             del self.ledger.positions[symbol]
         price_text = f"limit ${limit:.2f}" if limit else "market"
         return Outcome("ordered", f"SELL {qty} {symbol} ({price_text}), order {order.order_id}")
+
+    # ------------------------------------------------------------------ end-of-day safety net
+    def close_expiring(self, now: datetime | None = None) -> list[Outcome]:
+        """Market-sell bot positions in options that expire today, once the cut-off time has passed."""
+        cutoff = self.cfg.execution.auto_close_expiring_at
+        if not cutoff:
+            return []
+        now = now or self._now()
+        past_cutoff = now.time() >= parse_hhmm(cutoff)
+        today = now.date().isoformat()
+        with self._lock:
+            expiring = []
+            for sym, pos in self.ledger.positions.items():
+                exp = pos["asset_type"] == OPTION and pos["expiration"]
+                # Contracts from earlier days (bot was offline) are cleared any time; today's after the cut-off.
+                if not exp or exp > today or (exp == today and not past_cutoff):
+                    continue
+                failed_at = self._auto_close_failed_at.get(sym)
+                if failed_at and (now - failed_at).total_seconds() < 300:
+                    continue  # retry failed closes every 5 minutes, not every tick
+                expiring.append((sym, pos))
+            if not expiring:
+                return []
+            outcomes = []
+            for symbol, pos in expiring:
+                signal = Signal(action=SELL, ticker=pos["ticker"], asset_type=OPTION)
+                try:
+                    outcome = self._exit_one(signal, symbol)
+                    outcome.detail = f"auto-close before expiry: {outcome.detail}"
+                    self._auto_close_failed_at.pop(symbol, None)
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("Auto-close failed for %s", symbol)
+                    self._auto_close_failed_at[symbol] = now
+                    outcome = Outcome("error", f"auto-close {symbol}: {exc}")
+                outcomes.append(outcome)
+                (log.warning if outcome.status == "error" else log.info)("%s", outcome)
+            self.ledger.save()
+            return outcomes
 
 
 __all__ = ["Trader", "Ledger", "Outcome", "BUY", "SELL", "TRIM"]
