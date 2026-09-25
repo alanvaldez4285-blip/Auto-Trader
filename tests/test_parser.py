@@ -115,3 +115,28 @@ def test_spx_maps_to_spxw():
     s = p("BTO SPX 5800C 9/25 @ 3.20")
     assert s.symbol == "SPXW260925C05800000"
     assert s.broker_symbol({}) == "SPX260925C05800000"
+
+
+def test_implicit_option_entry():
+    text = "QCOM 205C at 1.00 - lotto @everyone"
+    assert p(text) is None  # off by default
+    s = parse_signal(text, TODAY, implicit_buy=True)
+    assert (s.action, s.ticker, s.strike, s.right, s.price) == (BUY, "QCOM", 205, "C", 1.00)
+    s = parse_signal("DELL 575C at .40 - lotto @everyone", TODAY, implicit_buy=True)
+    assert (s.ticker, s.strike, s.price) == ("DELL", 575, 0.40)
+
+
+@pytest.mark.parametrize("text", ["300% @everyone", "Let's see @everyone", "NVDA looking strong at 120"])
+def test_implicit_entry_needs_full_contract_and_price(text):
+    assert parse_signal(text, TODAY, implicit_buy=True) is None
+
+
+@pytest.mark.parametrize(
+    "text, action",
+    [("Sold", SELL), ("Out", SELL), ("stopped out", SELL), ("Cutting this", SELL),
+     ("Trimmed some here", TRIM), ("sell some if you want", TRIM), ("550%", None)],
+)
+def test_detect_action(text, action):
+    from copytrader.parser import detect_action
+
+    assert detect_action(text) == action

@@ -62,6 +62,12 @@ class ParsingConfig:
     extra_trim_words: list[str] = field(default_factory=list)
     # Option entries on these tickers that give no expiration date are treated as expiring today.
     assume_0dte_tickers: list[str] = field(default_factory=lambda: ["SPX", "SPXW", "XSP"])
+    # Option entries on any other ticker with no date: "skip" them, treat as "0dte",
+    # or use the nearest "friday" (this week's weekly, or today on a Friday).
+    missing_expiration: str = "skip"
+    # Treat "QCOM 205C at 1.00" (contract + price, no action word) as an entry.
+    # Only applies to new messages, never to replies, so "QCOM 205C at 2.50 now" updates aren't bought.
+    implicit_option_entries: bool = False
 
     def extra_words(self) -> dict[str, list[str]]:
         return {"buy": self.extra_buy_words, "sell": self.extra_sell_words, "trim": self.extra_trim_words}
@@ -135,6 +141,8 @@ def load_config(path: str | Path) -> Config:
     cfg.discord.channel_ids = [int(x) for x in cfg.discord.channel_ids]
     cfg.discord.author_ids = [int(x) for x in cfg.discord.author_ids]
     cfg.parsing.assume_0dte_tickers = [t.upper() for t in cfg.parsing.assume_0dte_tickers]
+    if cfg.parsing.missing_expiration not in ("skip", "0dte", "friday"):
+        raise ValueError("parsing.missing_expiration must be 'skip', '0dte' or 'friday'")
     cfg.execution.option_roots = {k.upper(): v.upper() for k, v in cfg.execution.option_roots.items()}
     if cfg.execution.auto_close_expiring_at:
         parse_hhmm(cfg.execution.auto_close_expiring_at)

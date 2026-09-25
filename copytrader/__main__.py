@@ -32,7 +32,7 @@ def cmd_parse(args) -> int:
     # A throwaway trader gives the same parsing (extra words, 0DTE defaults, SPX->SPXW) as a live run.
     trader = Trader(cfg, DryRunBroker(), ledger=Ledger("/nonexistent/never-saved.json"))
     for text in args.messages:
-        signal = trader.parse(text)
+        signal = trader.parse(text, reply_to=args.reply_to)
         if signal is None:
             print(f"{text!r}\n  -> not a trade signal")
             continue
@@ -41,7 +41,7 @@ def cmd_parse(args) -> int:
         elif signal.asset_type == "stock" or signal.is_complete_contract:
             note = f"  (broker symbol {signal.broker_symbol(cfg.execution.option_roots)})"
         else:
-            note = "  (would be skipped: option has no expiration date)"
+            note = "  (would be skipped: option has no expiration date; see parsing.missing_expiration)"
         print(f"{text!r}\n  -> {signal.describe()}{note}")
     return 0
 
@@ -74,7 +74,8 @@ def main(argv: list[str] | None = None) -> int:
 
     parse = sub.add_parser("parse", help="show how messages would be interpreted, without trading")
     parse.add_argument("messages", nargs="+")
-    parse.add_argument("-c", "--config", default="config.yaml", help="used for extra words, if it exists")
+    parse.add_argument("-c", "--config", default="config.yaml", help="used for parsing settings, if it exists")
+    parse.add_argument("-r", "--reply-to", help="treat the messages as replies to this alert text")
     parse.set_defaults(func=cmd_parse)
 
     args = parser.parse_args(argv)

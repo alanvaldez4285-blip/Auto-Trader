@@ -1,0 +1,55 @@
+# Preset for copying philthekeys in the phil-trades channel.
+#   cp examples/phil-trades.yaml config.yaml
+# His alerts look like "QCOM 205C at 1.00 - lotto": no BTO, no date. Updates such as "300%"
+# are replies to the alert and are ignored. Exits are expected as replies like "Sold" or "Out".
+# Secrets go in .env. Keep dry_run: true until the log shows his alerts handled correctly.
+dry_run: true
+
+state_file: state.json
+log_file: copytrader.log
+
+discord:
+  channel_names: [phil-trades]
+  channel_ids: []
+  author_ids: []
+  author_names: [philthekeys]
+  read_embeds: true
+
+broker:
+  name: alpaca              # or robinhood (paper: false required, see README)
+  paper: true
+
+sizing:
+  # Lottos are cheap. $200 buys 1 QCOM 205C at 1.00, or 4 DELL 575C at .40.
+  mode: dollars
+  dollars_per_trade: 200
+
+risk:
+  allow_stocks: false
+  allow_options: true
+  max_trades_per_day: 5
+  max_open_positions: 3
+  max_dollars_per_trade: 400
+  allowed_tickers: []
+  blocked_tickers: []
+  add_to_existing_positions: false
+  require_price_for_entries: true
+
+parsing:
+  implicit_option_entries: true   # "QCOM 205C at 1.00" counts as an entry
+  missing_expiration: friday      # no date = this week's Friday weekly (today on a Friday)
+  assume_0dte_tickers: [SPX, SPXW, XSP]
+  # Add his exit words here once you've seen them, e.g. extra_sell_words: [paid, cashed out]
+  extra_buy_words: []
+  extra_sell_words: []
+  extra_trim_words: []
+
+execution:
+  entry_order_type: limit
+  entry_slippage_pct: 10      # cheap lottos move fast; pay up to 10% over his price
+  exit_order_type: market
+  exit_slippage_pct: 10
+  trim_fraction: 0.5
+  option_roots: {SPX: SPXW}
+  auto_close_expiring_at: "15:50"   # weeklies are sold at 3:50pm ET on expiry day if he never posts an exit
+  market_timezone: America/New_York

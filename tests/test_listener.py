@@ -43,3 +43,25 @@ def test_channel_name_filter():
     lst = listener(channel_names=["options-with-demon"])
     assert lst._is_wanted(named_msg("😈｜options-with-demon😈"))
     assert not lst._is_wanted(named_msg("💬｜main-chat"))
+
+
+def test_thread_inside_watched_channel():
+    lst = listener(channel_names=["phil-trades"])
+    m = msg()
+    parent = SimpleNamespace(id=7, name="⛳｜phil-trades⛳")
+    m.channel = SimpleNamespace(id=99, name="QCOM 205C", parent=parent)
+    assert lst._is_wanted(m)
+
+
+def test_reply_context_uses_resolved_parent():
+    import asyncio
+
+    lst = listener()
+    parent = discord.Message.__new__(discord.Message)
+    parent.content, parent.embeds = "QCOM 205C at 1.00 - lotto", []
+    m = msg("Sold")
+    m.id = 2
+    m.reference = SimpleNamespace(message_id=1, resolved=parent, type=discord.MessageReferenceType.reply)
+    assert asyncio.run(lst._reply_context(m)) == "QCOM 205C at 1.00 - lotto"
+    m.reference = None
+    assert asyncio.run(lst._reply_context(m)) is None

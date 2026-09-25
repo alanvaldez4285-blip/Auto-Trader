@@ -49,17 +49,44 @@ class SignalListener(discord.Client):
     def _channel_matches(self, channel) -> bool:
         if not (self.cfg.channel_ids or self._channel_names):
             return True
-        if channel.id in self.cfg.channel_ids:
-            return True
-        name = (getattr(channel, "name", None) or "").lower()
-        return any(wanted in name for wanted in self._channel_names)
+        # Messages inside a thread (or a forum post) count as part of the channel the thread belongs to.
+        candidates = [channel]
+        if getattr(channel, "parent", None) is not None:
+            candidates.append(channel.parent)
+        for c in candidates:
+            if c.id in self.cfg.channel_ids:
+                return True
+            name = (getattr(c, "name", None) or "").lower()
+            if any(wanted in name for wanted in self._channel_names):
+                return True
+        return False
+
+    async def _reply_context(self, message: discord.Message) -> str | None:
+        """Text of the alert this message replies to, so "Sold" can be matched to its contract."""
+        ref = message.reference
+        if ref is None or ref.message_id is None:
+            return None
+        if getattr(ref, "type", None) == getattr(discord.MessageReferenceType, "forward", object()):
+            return None  # a forwarded message, not a reply
+        parent = ref.resolved if isinstance(ref.resolved, discord.Message) else None
+        if parent is None:
+            try:
+                parent = await message.channel.fetch_message(ref.message_id)
+            except discord.HTTPException:
+                log.warning("Could not load the message %s replies to", message.id)
+                return None
+        return message_text(parent, self.cfg.read_embeds) or None
 
     async def on_ready(self) -> None:
         log.info("Logged in to Discord as %s", self.user)
         if not (self.cfg.channel_ids or self._channel_names):
             log.warning("No channels configured: listening to EVERY channel the bot can see")
         if self._channel_names:
-            found = [c for c in self.get_all_channels() if hasattr(c, "history") and self._channel_matches(c)]
+            found = [
+                c
+                for c in self.get_all_channels()
+                if not isinstance(c, discord.CategoryChannel) and self._channel_matches(c)
+            ]
             for channel in found:
                 log.info("Watching #%s in %s (matched by name)", channel, channel.guild)
             if not found:
@@ -92,9 +119,10 @@ class SignalListener(discord.Client):
         text = message_text(message, self.cfg.read_embeds)
         if not text:
             return
-        log.debug("Message %s from %s: %s", message.id, message.author, text)
+        reply_to = await self._reply_context(message)
+        log.debug("Message %s from %s: %s (reply to: %s)", message.id, message.author, text, reply_to)
         # Broker calls block on HTTP, so run them off the event loop to keep the gateway heartbeat alive.
-        await asyncio.to_thread(self.trader.handle_message, message.id, text)
+        await asyncio.to_thread(self.trader.handle_message, message.id, text, reply_to)
 
 
 def run_listener(cfg: DiscordConfig, trader: Trader) -> None:

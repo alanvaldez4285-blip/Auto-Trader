@@ -11,13 +11,13 @@ import logging
 import math
 import threading
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .broker import Broker
 from .config import Config, parse_hhmm
-from .parser import BUY, INDEX_TICKERS, OPTION, SELL, STOCK, TRIM, Signal, parse_signal
+from .parser import BUY, INDEX_TICKERS, OPTION, SELL, STOCK, TRIM, Signal, detect_action, parse_signal
 from .ticks import option_root, round_to_tick  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
@@ -82,28 +82,54 @@ class Trader:
         # Expirations and daily limits follow the exchange's calendar day, not the local one.
         return self._clock() if self._clock else self._now().date()
 
-    def parse(self, text: str) -> Signal | None:
-        """Parse with this config's extra words, filling in the 0DTE expiration where configured."""
+    def parse(self, text: str, reply_to: str | None = None) -> Signal | None:
+        """Parse a message the way a live run would.
+
+        `reply_to` is the text of the message this one replies to. A reply like "Sold" or "trimmed"
+        that names no ticker takes its contract from the alert it replies to.
+        """
+        parsing = self.cfg.parsing
         today = self._today()
-        signal = parse_signal(text, today=today, extra_words=self.cfg.parsing.extra_words())
+        extra = parsing.extra_words()
+        implicit = parsing.implicit_option_entries and reply_to is None
+        signal = parse_signal(text, today=today, extra_words=extra, implicit_buy=implicit)
+
+        if signal is None and reply_to:
+            action = detect_action(text, extra)
+            if action in (SELL, TRIM):
+                parent = parse_signal(reply_to, today=today, extra_words=extra, implicit_buy=True)
+                if parent:
+                    # Keep only an explicit expiry from the alert; a guessed one could be wrong days later.
+                    signal = Signal(
+                        action=action,
+                        ticker=parent.ticker,
+                        asset_type=parent.asset_type,
+                        strike=parent.strike,
+                        right=parent.right,
+                        expiration=parent.expiration,
+                        raw=text,
+                    )
+
         if (
             signal
             and signal.action == BUY
             and signal.asset_type == OPTION
             and signal.expiration is None
-            and signal.ticker in self.cfg.parsing.assume_0dte_tickers
         ):
-            signal.expiration = today
+            if signal.ticker in parsing.assume_0dte_tickers or parsing.missing_expiration == "0dte":
+                signal.expiration = today
+            elif parsing.missing_expiration == "friday":
+                signal.expiration = today + timedelta(days=(4 - today.weekday()) % 7)
         return signal
 
     # ------------------------------------------------------------------ entry point
-    def handle_message(self, message_id: str | int, text: str) -> list[Outcome]:
+    def handle_message(self, message_id: str | int, text: str, reply_to: str | None = None) -> list[Outcome]:
         with self._lock:
             message_id = str(message_id)
             if message_id in self.ledger.processed:
                 return []
             self.ledger.processed.append(message_id)
-            signal = self.parse(text)
+            signal = self.parse(text, reply_to=reply_to)
             if signal is None:
                 self.ledger.save()
                 return []

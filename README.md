@@ -29,6 +29,8 @@ on [Alpaca](https://alpaca.markets). Stocks and options are both supported.
 | `STC SPY 450c @ 1.80` / `Sold all AAPL` / `All out SPY` | Sells the bot's whole position in that ticker or contract |
 | `In SPX 5800C 3.20` / `SPX 5800C @ 3.20 BTO` | Buys the SPXW 5800 call expiring today (no date on SPX means 0DTE) |
 | `Out SPX` / `Getting out SPX 5800C` | Sells the bot's SPX position |
+| `QCOM 205C at 1.00 - lotto` | Buys the QCOM 205 call, only with `implicit_option_entries: true` |
+| A reply "Sold" or "trimmed some" to an alert | Sells all or half of the contract in the alert it replies to |
 
 "In" and "Out" only count when they start a line, so everyday chat like "SPX looking good in here" is ignored.
 If the trader uses other words, add them under `parsing` in `config.yaml` instead of editing code.
@@ -41,6 +43,34 @@ python -m copytrader parse "BTO SPY 450c 10/20 @ 1.20" "Trim SPY 450c" "Sold all
 
 If a format your server uses is not recognised, open an issue with a few example messages or adjust
 the patterns in `copytrader/parser.py`.
+
+## Copying philthekeys in phil-trades
+
+A ready-made config is in `examples/phil-trades.yaml`:
+
+```bash
+cp examples/phil-trades.yaml config.yaml
+```
+
+His alerts look like `QCOM 205C at 1.00 - lotto @everyone`, and the preset is built around that:
+
+- **Entries without "BTO".** A new message with a ticker, strike, call or put, and price counts as an entry
+  (`implicit_option_entries`). Replies never count as entries, so a reply like "QCOM 205C at 2.50 now" is not bought.
+- **No date means this week's Friday weekly.** On a Friday that is the same day, which matches his QCOM
+  position card (`missing_expiration: friday`).
+- **Updates are ignored.** Replies like "Let's see" or "300%" do nothing.
+- **Exits by reply.** A reply to his alert saying "Sold", "Out", "stopped out", or "cut" sells the bot's
+  position in that contract; "trimmed" or "sold some" sells half. The contract comes from the alert he replied to.
+- **$200 per alert,** 10% entry slippage for fast-moving lottos, and weeklies are sold at 3:50pm ET on
+  expiry day if he never posts an exit.
+
+His exit wording is a guess until you see a few. Test them as replies to an alert:
+
+```bash
+python -m copytrader parse -c examples/phil-trades.yaml -r "QCOM 205C at 1.00 - lotto" "Sold" "trimmed some"
+```
+
+If he uses a word the bot doesn't catch, add it under `parsing.extra_sell_words` or `extra_trim_words`.
 
 ## Copying the options-with-demon channel (SPX 0DTE)
 

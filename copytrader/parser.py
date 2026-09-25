@@ -22,9 +22,11 @@ STOCK, OPTION = "stock", "option"
 
 # Order matters only for readability; the earliest match in the message wins.
 _ACTION_PATTERNS: list[tuple[str, str]] = [
-    (TRIM, r"trim(?:ming|med)?|scal(?:e|ing)\s+out|sell(?:ing)?\s+half|sold\s+half|partials?|taking\s+profits?"),
+    (TRIM, r"trim(?:ming|med)?|scal(?:e|ing)\s+out|sell(?:ing)?\s+(?:half|some)|sold\s+(?:half|some)"
+           r"|partials?|taking\s+profits?|t(?:ook|aking)\s+some"),
     (BUY, r"bto|buy\s+to\s+open|buy(?:ing)?|bought|entry|entering"),
-    (SELL, r"stc|sell\s+to\s+close|sell(?:ing)?|sold|clos(?:e|ed|ing)|exit(?:ed|ing)?|all\s+out|out\s+of"),
+    (SELL, r"stc|sell\s+to\s+close|sell(?:ing)?|sold|clos(?:e|ed|ing)|exit(?:ed|ing)?|all\s+out|out\s+of"
+           r"|stopped\s+out|stop\s+hit|cut(?:ting)?"),
 ]
 # "In SPX 5800C 3.20" / "Out SPX" are common, but "in" and "out" are everyday words,
 # so they only count as actions at the start of a line.
@@ -160,24 +162,44 @@ def _blank(text: str, spans: list[tuple[int, int]]) -> str:
     return "".join(chars)
 
 
+def _clean(text: str) -> str:
+    # Drop Discord mentions, custom emoji and URLs so they don't produce false tickers.
+    text = re.sub(r"<[@#:a-zA-Z0-9_!&]+>|https?://\S+|@everyone|@here", " ", text)
+    return text.replace("*", " ").replace("_", " ").replace("`", " ")
+
+
+def _extra_key(extra_words: dict[str, list[str]] | None) -> tuple:
+    return tuple(sorted((k, tuple(v)) for k, v in (extra_words or {}).items()))
+
+
+def detect_action(text: str, extra_words: dict[str, list[str]] | None = None) -> str | None:
+    """Just the action (buy/sell/trim) in a message, e.g. "Sold" in a reply to an alert."""
+    m = _action_regex(_extra_key(extra_words)).search(_clean(text))
+    return m.lastgroup.split("_")[0] if m else None
+
+
 def parse_signal(
     text: str,
     today: date | None = None,
     extra_words: dict[str, list[str]] | None = None,
+    implicit_buy: bool = False,
 ) -> Signal | None:
     """Parse one message. Returns None when it is not a recognisable trade call-out.
 
     `extra_words` adds phrases per action, e.g. {"buy": ["loading"], "sell": ["cashed"]}.
+    `implicit_buy` treats a full option call-out with a price and no action word
+    ("QCOM 205C at 1.00 - lotto") as an entry.
     """
     today = today or date.today()
     raw = text
-    # Drop Discord mentions, custom emoji and URLs so they don't produce false tickers.
-    text = re.sub(r"<[@#:a-zA-Z0-9_!&]+>|https?://\S+", " ", text)
-    text = text.replace("*", " ").replace("_", " ").replace("`", " ")
+    text = _clean(text)
 
-    extra = tuple(sorted((k, tuple(v)) for k, v in (extra_words or {}).items()))
-    action_match = _action_regex(extra).search(text)
+    action_match = _action_regex(_extra_key(extra_words)).search(text)
     if not action_match:
+        if implicit_buy:
+            signal = _parse_body(text, BUY, today, raw)
+            if signal and signal.asset_type == OPTION and signal.price is not None:
+                return signal
         return None
     action = action_match.lastgroup.split("_")[0]
     # Text before the action keyword is usually chatter ("ok guys"), so look after it first.
