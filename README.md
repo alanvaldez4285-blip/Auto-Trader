@@ -138,6 +138,36 @@ Recommended progression:
 The bot has to stay running to catch alerts. A cheap always-on VPS, a Raspberry Pi, or a spare PC works.
 Keep `state.json` between restarts, since that is how the bot remembers what it bought.
 
+## Using Robinhood instead of Alpaca
+
+The bot can place orders on Robinhood, but read this first:
+
+- **It uses an unofficial API.** Robinhood has no public API for stocks or options. The bot logs in with
+  your username and password through the [robin_stocks](https://pypi.org/project/robin-stocks/) library
+  and calls the same private endpoints the app uses. That is against Robinhood's terms of service and
+  can get your account restricted. It can also stop working whenever Robinhood changes its app.
+- **There is no paper trading.** Every Robinhood order is real money. Test with `dry_run: true` until the
+  log shows every alert handled correctly. The bot refuses to start on Robinhood unless you set
+  `broker.paper: false`, as a deliberate confirmation.
+- **SPX is untested on Robinhood.** The bot looks up SPX contracts under both SPXW and SPX. Watch your
+  first few trades in the Robinhood app to confirm the right contract is picked.
+- **Options always go in as limit orders.** Exits labelled "market" are sent as limits at the bid, which fill right away.
+
+Setup:
+
+```bash
+pip install -r requirements-robinhood.txt
+```
+
+1. Put `ROBINHOOD_USERNAME` and `ROBINHOOD_PASSWORD` in `.env`.
+2. Recommended: in the Robinhood app, turn on two-factor authentication with an **authenticator app**.
+   When it shows the setup key, copy it into `.env` as `ROBINHOOD_MFA_SECRET`, then finish setup in your
+   authenticator app as usual. The bot then generates login codes itself.
+   Without it, the first login asks you to approve the device in the app or type a texted code.
+3. In `config.yaml`, set `broker.name: robinhood`, `broker.paper: false`, and `dry_run: false`.
+
+The login is saved in `~/.tokens/robinhood.pickle`, so restarts don't ask again. Keep that file private.
+
 ## Configuration
 
 Everything is in `config.yaml`; each setting is explained in `config.example.yaml`. The main ones:

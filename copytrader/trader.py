@@ -18,30 +18,11 @@ from zoneinfo import ZoneInfo
 from .broker import Broker
 from .config import Config, parse_hhmm
 from .parser import BUY, INDEX_TICKERS, OPTION, SELL, STOCK, TRIM, Signal, parse_signal
+from .ticks import option_root, round_to_tick  # noqa: F401 - re-exported
 
 log = logging.getLogger(__name__)
 
 MAX_REMEMBERED_MESSAGES = 2000
-# Cboe minimum price increments for index options: $0.05 under $3, $0.10 at $3 and above.
-_NICKEL_DIME_ROOTS = {"SPX", "SPXW", "VIX", "VIXW", "NDX", "NDXP", "RUT", "RUTW", "DJX"}
-
-
-def option_root(symbol: str) -> str:
-    """Root of an OCC symbol: everything before the 6-digit date, e.g. SPXW from SPXW260925C06500000."""
-    return symbol[:-15]
-
-
-def round_to_tick(price: float, symbol: str, asset_type: str, side: str) -> float:
-    if asset_type == OPTION and option_root(symbol) in _NICKEL_DIME_ROOTS:
-        tick = 0.05 if price < 3 else 0.10
-    else:
-        tick = 0.01
-    steps = price / tick
-    # Buys round up and sells round down, so the limit is never tighter than intended.
-    steps = math.ceil(steps - 1e-9) if side == "buy" else math.floor(steps + 1e-9)
-    return round(max(steps, 1) * tick, 2)
-
-
 @dataclass
 class Outcome:
     status: str  # "ordered", "skipped" or "error"

@@ -1,0 +1,4 @@
+# Only needed for broker.name: robinhood (unofficial API, see README)
+-r requirements.txt
+robin_stocks>=3.4
+pyotp>=2.9

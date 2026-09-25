@@ -15,7 +15,7 @@ discord:
   read_embeds: true
 
 broker:
-  name: alpaca
+  name: alpaca              # or robinhood; Robinhood has no paper mode, so it needs paper: false
   paper: true
 
 sizing:

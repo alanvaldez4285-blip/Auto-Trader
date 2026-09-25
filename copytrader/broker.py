@@ -163,6 +163,21 @@ def make_broker(cfg) -> Broker:
     if cfg.dry_run:
         log.warning("DRY RUN: orders are simulated and never sent to a broker")
         return DryRunBroker()
+    if cfg.broker.name == "robinhood":
+        if cfg.broker.paper:
+            raise SystemExit(
+                "Robinhood has no paper trading. Test with dry_run: true first; set broker.paper: false "
+                "to confirm you want real-money orders on Robinhood."
+            )
+        from .broker_robinhood import RobinhoodBroker
+
+        log.warning("LIVE TRADING ENABLED on Robinhood via its unofficial API: real money orders")
+        return RobinhoodBroker(
+            cfg.broker.username,
+            cfg.broker.password,
+            mfa_secret=cfg.broker.mfa_secret,
+            account_number=cfg.broker.account_number,
+        )
     if cfg.broker.name != "alpaca":
         raise ValueError(f"unsupported broker {cfg.broker.name!r}")
     if not cfg.broker.paper:

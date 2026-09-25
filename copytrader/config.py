@@ -11,7 +11,7 @@ import yaml
 
 @dataclass
 class DiscordConfig:
-    token: str = ""
+    token: str = field(default="", repr=False)
     channel_ids: list[int] = field(default_factory=list)
     # Match channels by name instead of ID, e.g. "options-with-demon". Case-insensitive substring,
     # so emoji and separators around the name don't matter.
@@ -23,10 +23,14 @@ class DiscordConfig:
 
 @dataclass
 class BrokerConfig:
-    name: str = "alpaca"
+    name: str = "alpaca"  # "alpaca" or "robinhood"
     paper: bool = True
-    api_key: str = ""
-    secret_key: str = ""
+    account_number: str = ""  # Robinhood only: pick one account if you have several
+    api_key: str = field(default="", repr=False)
+    secret_key: str = field(default="", repr=False)
+    username: str = ""
+    password: str = field(default="", repr=False)
+    mfa_secret: str = field(default="", repr=False)
 
 
 @dataclass
@@ -119,6 +123,12 @@ def load_config(path: str | Path) -> Config:
     cfg.discord.token = os.environ.get("DISCORD_TOKEN", "")
     cfg.broker.api_key = os.environ.get("ALPACA_API_KEY", "")
     cfg.broker.secret_key = os.environ.get("ALPACA_SECRET_KEY", "")
+    cfg.broker.username = os.environ.get("ROBINHOOD_USERNAME", "")
+    cfg.broker.password = os.environ.get("ROBINHOOD_PASSWORD", "")
+    cfg.broker.mfa_secret = os.environ.get("ROBINHOOD_MFA_SECRET", "")
+    cfg.broker.account_number = str(cfg.broker.account_number or "")
+    if cfg.broker.name not in ("alpaca", "robinhood"):
+        raise ValueError("broker.name must be 'alpaca' or 'robinhood'")
 
     cfg.risk.allowed_tickers = [t.upper() for t in cfg.risk.allowed_tickers]
     cfg.risk.blocked_tickers = [t.upper() for t in cfg.risk.blocked_tickers]

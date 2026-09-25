@@ -20,8 +20,9 @@ discord:
   read_embeds: true         # also parse embed text (many alert bots post embeds)
 
 broker:
-  name: alpaca
-  paper: true               # true = Alpaca paper account, false = real money
+  name: alpaca              # "alpaca" or "robinhood" (unofficial API, see README first)
+  paper: true               # true = Alpaca paper account, false = real money. Robinhood requires false.
+  account_number: ""        # Robinhood only, if you have more than one account
 
 sizing:
   mode: dollars             # "dollars": spend dollars_per_trade on each entry; "fixed": fixed quantity
