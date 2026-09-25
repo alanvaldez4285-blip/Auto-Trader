@@ -1,0 +1,46 @@
+# Copy this file to config.yaml and edit it. Secrets (tokens, API keys) go in .env, not here.
+
+# Start with dry_run: true. Orders are only logged and simulated, nothing is sent to a broker.
+# Then set dry_run: false with broker.paper: true to trade with Alpaca's fake money.
+# Only set broker.paper: false once you've watched it behave correctly for a while.
+dry_run: true
+
+state_file: state.json      # positions this bot opened, daily trade count
+log_file: copytrader.log
+
+discord:
+  # Right-click the signal channel > Copy Channel ID (turn on Developer Mode in Discord settings first).
+  channel_ids: []
+  # Only copy messages from these people. Right-click a user > Copy User ID.
+  # Leave both empty to act on anyone who posts in the channel.
+  author_ids: []
+  author_names: []          # username or server nickname, case-insensitive
+  read_embeds: true         # also parse embed text (many alert bots post embeds)
+
+broker:
+  name: alpaca
+  paper: true               # true = Alpaca paper account, false = real money
+
+sizing:
+  mode: dollars             # "dollars": spend dollars_per_trade on each entry; "fixed": fixed quantity
+  dollars_per_trade: 500
+  fixed_shares: 1
+  fixed_contracts: 1
+
+risk:
+  allow_stocks: true
+  allow_options: true
+  max_trades_per_day: 10    # new entries per day; exits are never blocked
+  max_open_positions: 5
+  max_dollars_per_trade: 1000   # hard cap, applies in both sizing modes
+  allowed_tickers: []       # e.g. [SPY, QQQ]; empty = any ticker
+  blocked_tickers: []
+  add_to_existing_positions: false   # copy "adding more" call-outs on a ticker you already hold
+  require_price_for_entries: false   # ignore entries that don't state a price
+
+execution:
+  entry_order_type: limit   # limit protects you from chasing a spike; market fills immediately
+  entry_slippage_pct: 5     # limit price = call-out price + 5%
+  exit_order_type: market   # market gets you out fast; limit uses call-out price - exit_slippage_pct
+  exit_slippage_pct: 5
+  trim_fraction: 0.5        # "Trim" / "sell half" sells this share of the position
